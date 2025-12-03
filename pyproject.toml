@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "websocket-server"
+version = "0.1.0"
+description = "WebSocket server with DynamoDB connection registry"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Developer"}
+]
+dependencies = [
+    "websockets>=14.0",
+    "boto3>=1.34.0",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "moto>=5.0.0",
+]
+
+[project.scripts]
+websocket-server = "websocket_server.main:main"
+websocket-client = "websocket_client.main:main"
+websocket-client-interactive = "websocket_client.main:main_interactive"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+

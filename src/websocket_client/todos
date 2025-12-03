@@ -1,0 +1,34 @@
+1. Ping Pong pros vs connects
+2. Implelement ping and pong based healthcheck on both client and server
+3. K8s pod healthcheck based on ping and pong on client side
+4. Inpact of 2 clients on 2 pods if not how about HA setup
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│                        CLIENT RUNNING                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────┐                                              │
+│  │   Connect    │◄─────────────────────────────────────────┐   │
+│  │  with Retry  │                                          │   │
+│  └──────┬───────┘                                          │   │
+│         │ success                                          │   │
+│         ▼                                                  │   │
+│  ┌──────────────┐     ┌──────────────┐                    │   │
+│  │    Start     │────►│  Keepalive   │ (background)       │   │
+│  │  Keepalive   │     │    Loop      │                    │   │
+│  └──────┬───────┘     └──────┬───────┘                    │   │
+│         │                    │                             │   │
+│         ▼                    │ no pong?                    │   │
+│  ┌──────────────┐            │                             │   │
+│  │   Message    │◄───────────┤                             │   │
+│  │    Loop      │            │                             │   │
+│  └──────┬───────┘            │                             │   │
+│         │                    │                             │   │
+│         │ • shutdown msg     ▼                             │   │
+│         │ • send failure  ┌──────────────┐                 │   │
+│         │ • conn closed   │   Request    │                 │   │
+│         └────────────────►│  Reconnect   │─────────────────┘   │
+│                           └──────────────┘                     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
