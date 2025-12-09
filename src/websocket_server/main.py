@@ -5,9 +5,11 @@ import logging
 import signal
 import sys
 
+from aiohttp import web
 from websockets.asyncio.server import serve
 
 from websocket_server.config import get_settings
+from websocket_server.http import create_http_app
 from websocket_server.registry import ConnectionRegistry
 from websocket_server.server import WebSocketHandler
 
@@ -22,10 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 async def run_server() -> None:
-    """Initialize and run the WebSocket server."""
+    """Initialize and run the WebSocket server and HTTP API server."""
     settings = get_settings()
 
     logger.info(f"Starting WebSocket server on {settings.host}:{settings.port}")
+    logger.info(f"Starting HTTP server on {settings.host}:{settings.http_port}")
 
     if settings.is_local_dev:
         logger.info(f"Running in local development mode with endpoint: {settings.dynamodb_endpoint_url}")
@@ -41,11 +44,14 @@ async def run_server() -> None:
     # Create the WebSocket handler
     handler = WebSocketHandler(registry, settings)
 
+    # Create HTTP app with access to WebSocket handler
+    http_app = create_http_app(handler)
+
     # Set up graceful shutdown
     stop_event = asyncio.Event()
 
     def handle_shutdown():
-        logger.info("Shutdown signal received, stopping server...")
+        logger.info("Shutdown signal received, stopping servers...")
         stop_event.set()
 
     # Register signal handlers
@@ -53,7 +59,16 @@ async def run_server() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, handle_shutdown)
 
-    # Start the server
+    # Start the HTTP server
+    http_runner = web.AppRunner(http_app)
+    await http_runner.setup()
+    http_site = web.TCPSite(http_runner, settings.host, settings.http_port)
+    await http_site.start()
+
+    logger.info(f"HTTP server listening on http://{settings.host}:{settings.http_port}")
+    logger.info(f"Health endpoint: http://{settings.host}:{settings.http_port}/health")
+
+    # Start the WebSocket server
     async with serve(
         handler.handle_connection,
         settings.host,
@@ -78,7 +93,10 @@ async def run_server() -> None:
         logger.info("Initiating graceful shutdown...")
         await handler.close_all_connections(timeout=settings.shutdown_timeout)
 
-    logger.info("Server stopped")
+    # Clean up HTTP server
+    await http_runner.cleanup()
+
+    logger.info("Servers stopped")
 
 
 def main() -> None:

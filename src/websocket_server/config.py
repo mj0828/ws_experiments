@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8765
+    http_port: int = 8080  # HTTP API port for health checks and other endpoints
 
     # WebSocket path settings
     # Context path pattern: /{version}/mai/ws/stream
