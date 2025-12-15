@@ -36,7 +36,7 @@ def example_message_handler(message: dict[str, Any]) -> Optional[dict[str, Any]]
 
     if msg_type == "pong":
         # Pong is handled internally by client for keepalive, just log
-        logger.debug("Received pong response from server")
+        logger.info("Received pong response from server")
         return None
 
     elif msg_type == "info":

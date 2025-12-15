@@ -35,16 +35,6 @@ class BaseMessageHandler(ABC):
         self.registry = registry
 
     @abstractmethod
-    async def handle_ping(
-        self,
-        websocket: ServerConnection,
-        connection: Connection,
-        data: dict[str, Any],
-    ) -> None:
-        """Handle ping message and respond with pong."""
-        pass
-
-    @abstractmethod
     async def handle_info(
         self,
         websocket: ServerConnection,
@@ -109,9 +99,7 @@ class BaseMessageHandler(ABC):
         msg_type = data.get("type", "unknown")
 
         # Route to appropriate handler
-        if msg_type == "ping":
-            await self.handle_ping(websocket, connection, data)
-        elif msg_type == "info":
+        if msg_type == "info":
             await self.handle_info(websocket, connection, data)
         else:
             await self.handle_unknown(websocket, connection, data)
@@ -125,28 +113,6 @@ class V1MessageHandler(BaseMessageHandler):
     """
 
     version = "v1"
-
-    async def handle_ping(
-        self,
-        websocket: ServerConnection,
-        connection: Connection,
-        data: dict[str, Any],
-    ) -> None:
-        """Handle ping with simple pong response."""
-        # Refresh TTL in background thread
-        await asyncio.to_thread(
-            self.registry.refresh_ttl, connection.connection_id
-        )
-
-        await websocket.send(
-            json.dumps(
-                {
-                    "type": "pong",
-                    "connection_id": str(connection.connection_id),
-                }
-            )
-        )
-        logger.info(f"Sent pong response to {connection.connection_id}")
 
     async def handle_info(
         self,
@@ -219,29 +185,6 @@ class V2MessageHandler(BaseMessageHandler):
 
         return response
 
-    async def handle_ping(
-        self,
-        websocket: ServerConnection,
-        connection: Connection,
-        data: dict[str, Any],
-    ) -> None:
-        """Handle ping with enhanced pong response including timestamp."""
-        # Refresh TTL in background thread
-        await asyncio.to_thread(
-            self.registry.refresh_ttl, connection.connection_id
-        )
-
-        request_id = data.get("request_id")
-
-        response = self._build_response(
-            "pong",
-            connection,
-            data={"status": "healthy"},
-            request_id=request_id,
-        )
-
-        await websocket.send(json.dumps(response))
-
     async def handle_info(
         self,
         websocket: ServerConnection,
@@ -256,7 +199,7 @@ class V2MessageHandler(BaseMessageHandler):
             connection,
             data={
                 "connection": connection.to_dict(),
-                "capabilities": ["ping", "info", "echo"],
+                "capabilities": ["info", "echo"],
             },
             request_id=request_id,
         )

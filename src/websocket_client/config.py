@@ -48,13 +48,20 @@ class ClientSettings(BaseSettings):
     connection_timeout: float = 10.0  # Timeout for establishing connection
 
     # WebSocket protocol-level ping (handled by websockets library)
-    ws_ping_interval: float = 20.0  # WebSocket protocol ping interval
-    ws_ping_timeout: float = 10.0  # WebSocket protocol ping timeout
+    # Note: Server handles pings, so disable client-side pings to avoid conflicts
+    ws_ping_interval: Optional[float] = None  # Disable client-initiated protocol pings
+    ws_ping_timeout: Optional[float] = None   # Server handles ping/pong
 
-    # Application-level keepalive settings
-    keepalive_enabled: bool = True  # Enable application-level keepalive
+    # Application-level keepalive settings (client-initiated pings)
+    # Note: With server-initiated pings, this can be disabled
+    keepalive_enabled: bool = False  # Disable client-initiated keepalive (server now sends pings)
     keepalive_interval: float = 30.0  # Interval for sending keepalive pings
     keepalive_timeout: float = 15.0  # Timeout waiting for pong response
+
+    # Server heartbeat monitoring
+    # The server sends application-level heartbeat messages that are visible to the client
+    # This allows detection of dead connections through proxies/NAT gateways
+    server_heartbeat_timeout: float = 60.0  # Reconnect if no heartbeat received in this many seconds
 
     # Message handler settings
     message_handler_timeout: float = 30.0  # Timeout for processing a message

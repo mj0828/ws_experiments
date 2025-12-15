@@ -89,11 +89,16 @@ class WebSocketClient:
         self._should_reconnect = True
         self._retry_count = 0
 
-        # Keepalive state
+        # Keepalive state (for client-initiated pings, if needed)
         self._keepalive_task: Optional[asyncio.Task] = None
         self._last_pong_time: float = 0
         self._pending_ping: bool = False
         self._reconnect_requested: bool = False
+
+        # Server heartbeat tracking (for detecting dead connections through proxies)
+        self._last_server_heartbeat_time: float = 0
+        self._heartbeat_timeout: float = settings.server_heartbeat_timeout
+        self._heartbeat_monitor_task: Optional[asyncio.Task] = None
 
         # Connection event - set when connected, cleared when disconnected
         self._connected_event = asyncio.Event()
@@ -169,6 +174,7 @@ class WebSocketClient:
                 self._connection_id = data.get("connection_id")
                 self._retry_count = 0  # Reset retry count on successful connection
                 self._last_pong_time = time.monotonic()  # Initialize pong time
+                self._last_server_heartbeat_time = time.monotonic()  # Initialize heartbeat time
                 self._pending_ping = False
                 self._reconnect_requested = False
                 self._connected_event.set()  # Signal that we're connected
@@ -443,11 +449,57 @@ class WebSocketClient:
 
         logger.debug("Keepalive loop ended")
 
+    async def _heartbeat_monitor_loop(self) -> None:
+        """
+        Background task that monitors server heartbeat messages.
+        
+        If no heartbeat is received within the timeout, triggers reconnection.
+        This is critical for detecting dead connections through proxies/NAT.
+        """
+        logger.debug("Heartbeat monitor loop started")
+
+        while self._running and self.is_connected:
+            try:
+                # Check every 5 seconds
+                await asyncio.sleep(5)
+
+                if not self._running or not self.is_connected:
+                    break
+
+                # Check if we've received a heartbeat recently
+                elapsed = time.monotonic() - self._last_server_heartbeat_time
+                if elapsed > self._heartbeat_timeout:
+                    logger.warning(
+                        f"No heartbeat from server in {elapsed:.1f}s "
+                        f"(timeout: {self._heartbeat_timeout}s), "
+                        "connection may be dead, requesting reconnection"
+                    )
+                    self._request_reconnect()
+                    break
+
+            except asyncio.CancelledError:
+                logger.debug("Heartbeat monitor loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in heartbeat monitor loop: {e}")
+                self._request_reconnect()
+                break
+
+        logger.debug("Heartbeat monitor loop ended")
+
     def _start_keepalive(self) -> None:
         """Start the keepalive background task."""
         if self.settings.keepalive_enabled and self._keepalive_task is None:
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
             logger.debug("Keepalive task started")
+
+    def _start_heartbeat_monitor(self) -> None:
+        """Start the heartbeat monitor background task."""
+        if self._heartbeat_monitor_task is None:
+            self._heartbeat_monitor_task = asyncio.create_task(
+                self._heartbeat_monitor_loop()
+            )
+            logger.debug("Heartbeat monitor task started")
 
     async def _stop_keepalive(self) -> None:
         """Stop the keepalive background task."""
@@ -459,6 +511,17 @@ class WebSocketClient:
                 pass
             self._keepalive_task = None
             logger.debug("Keepalive task stopped")
+
+    async def _stop_heartbeat_monitor(self) -> None:
+        """Stop the heartbeat monitor background task."""
+        if self._heartbeat_monitor_task is not None:
+            self._heartbeat_monitor_task.cancel()
+            try:
+                await self._heartbeat_monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._heartbeat_monitor_task = None
+            logger.debug("Heartbeat monitor task stopped")
 
     def _default_message_handler(self, message: dict[str, Any]) -> Optional[dict[str, Any]]:
         """
@@ -495,7 +558,14 @@ class WebSocketClient:
 
         msg_type = message.get("type", "unknown")
 
-        # Handle pong response (update keepalive state)
+        # Handle heartbeat from server - update last heartbeat time
+        if msg_type == "heartbeat":
+            self._last_server_heartbeat_time = time.monotonic()
+            logger.info(f"Received heartbeat from server (last seen: {self._last_server_heartbeat_time:.2f})")
+            # Don't pass heartbeat to user's message handler
+            return True
+
+        # Handle pong response (update keepalive state for client-initiated pings)
         if msg_type == "pong":
             self._last_pong_time = time.monotonic()
             self._pending_ping = False
@@ -517,6 +587,7 @@ class WebSocketClient:
 
         # Call the message handler and send response if any
         try:
+            self._last_server_heartbeat_time = time.monotonic() # Update on any messages.
             response = await asyncio.wait_for(
                 asyncio.coroutine(lambda: self.message_handler(message))()
                 if not asyncio.iscoroutinefunction(self.message_handler)
@@ -557,10 +628,15 @@ class WebSocketClient:
                 logger.error("Failed to establish connection. Exiting.")
                 break
 
-            # Start keepalive monitoring
+            # Start keepalive monitoring (for optional client-initiated pings)
             self._start_keepalive()
 
+            # Start heartbeat monitoring (detect dead connections through proxies)
+            self._start_heartbeat_monitor()
+
             # Process messages
+            # Note: Protocol-level pings/pongs are handled by websockets library,
+            # but application-level heartbeats are visible as messages
             try:
                 async for message in self._websocket:
                     if not self._running:
@@ -586,6 +662,9 @@ class WebSocketClient:
 
             # Stop keepalive
             await self._stop_keepalive()
+
+            # Stop heartbeat monitor
+            await self._stop_heartbeat_monitor()
 
             # Clean up current connection
             self._connected_event.clear()  # Signal that we're disconnected
@@ -614,6 +693,9 @@ class WebSocketClient:
 
         # Stop keepalive
         await self._stop_keepalive()
+
+        # Stop heartbeat monitor
+        await self._stop_heartbeat_monitor()
 
         # Clear connection state
         self._connected_event.clear()

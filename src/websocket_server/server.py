@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -28,6 +29,9 @@ class WebSocketHandler:
         self._connections: dict[ServerConnection, Connection] = {}
         # Version-specific message handlers
         self._message_handlers = MessageHandlerRegistry(registry)
+        # Ping/Pong settings
+        self._pong_timeout: float = 10.0   # Wait 10 seconds for pong response
+        self._recv_timeout: float = 25.0   # Wait 25 seconds for next message
 
     @property
     def active_connection_count(self) -> int:
@@ -205,9 +209,52 @@ class WebSocketHandler:
                 )
             )
 
-            # Process incoming messages
-            async for message in websocket:
-                await self._handle_message(websocket, connection, message)
+            # Process incoming messages with integrated ping/pong
+            while True:
+                try:
+                    # Send protocol-level ping and wait for pong with timeout
+                    logger.info(f"Sending protocol ping over {connection.connection_id}")
+                    pong_waiter = await websocket.ping()
+                    await asyncio.wait_for(pong_waiter, timeout=self._pong_timeout)
+                    logger.info(f"Received protocol pong from {connection.connection_id}")
+                    
+                    # Send application-level heartbeat so client can detect dead connections
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": "heartbeat",
+                                "connection_id": str(connection.connection_id),
+                                "timestamp": time.time(),
+                            }
+                        )
+                    )
+                    logger.debug(f"Sent heartbeat to {connection.connection_id}")
+                    
+                except asyncio.TimeoutError:
+                    # No pong in time -> close connection
+                    logger.warning(
+                        f"No pong response from {connection.connection_id} in "
+                        f"{self._pong_timeout}s, closing connection"
+                    )
+                    await websocket.close(1008, "Pong timeout")
+                    break
+
+                try:
+                    # Wait for next message with timeout
+                    message = await asyncio.wait_for(
+                        websocket.recv(), timeout=self._recv_timeout
+                    )
+                    await self._handle_message(websocket, connection, message)
+                except asyncio.TimeoutError:
+                    # No message received - this is OK, just continue to next ping
+                    logger.debug(
+                        f"No message from {connection.connection_id} in "
+                        f"{self._recv_timeout}s, continuing"
+                    )
+                    continue
+                except ConnectionClosed:
+                    logger.info(f"Connection closed by client: {connection.connection_id}")
+                    break
 
         except Exception as e:
             logger.error(f"Error handling connection: {e}", exc_info=True)
